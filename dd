@@ -1,0 +1,185 @@
+package com.example.historydata;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Optional;
+
+// 1. Database Utility Class (DBConnectionUtil)
+public class DBConnectionUtil {
+    private static final String URL = "jdbc:postgresql://localhost:5432/your_database";
+    private static final String USER = "your_username";
+    private static final String PASSWORD = "your_password";
+
+    public static Connection getConnection() throws SQLException {
+        return DriverManager.getConnection(URL, USER, PASSWORD);
+    }
+}
+
+// 2. Model Classes
+class UploadHistory {
+    private int id;
+    private int year;
+    private int status;
+
+    // Getters and Setters
+}
+
+class HistoryData {
+    private String targetYear;
+    private String location;
+    private String importDate;
+    private double t1;
+    private double t2;
+
+    // Getters and Setters
+}
+
+// 3. DTO Classes
+class HistoryDataDTO {
+    private String targetYear;
+    private String location;
+    private String importDate;
+    private double t1;
+    private double t2;
+
+    // Constructor to map from entity to DTO
+    public HistoryDataDTO(HistoryData historyData) {
+        this.targetYear = historyData.getTargetYear();
+        this.location = historyData.getLocation();
+        this.importDate = historyData.getImportDate();
+        this.t1 = historyData.getT1();
+        this.t2 = historyData.getT2();
+    }
+
+    // Getters and Setters
+}
+
+class UploadHistoryDTO {
+    private int id;
+    private int year;
+    private int status;
+
+    // Constructor to map from entity to DTO
+    public UploadHistoryDTO(UploadHistory uploadHistory) {
+        this.id = uploadHistory.getId();
+        this.year = uploadHistory.getYear();
+        this.status = uploadHistory.getStatus();
+    }
+
+    // Getters and Setters
+}
+
+// 4. DAO Interface
+interface HistoryDataDAO {
+    List<HistoryData> getHistoryDataByMonth(String month) throws SQLException;
+    UploadHistory getUploadHistory(int year) throws SQLException;
+}
+
+// 5. DAO Implementation
+class HistoryDataDAOImpl implements HistoryDataDAO {
+    @Override
+    public List<HistoryData> getHistoryDataByMonth(String month) throws SQLException {
+        List<HistoryData> historyDataList = new ArrayList<>();
+        String query = "SELECT * FROM history_data WHERE EXTRACT(YEAR FROM import_date) = ? AND target_year = ? AND import_date = ?";
+
+        try (Connection connection = DBConnectionUtil.getConnection();
+             PreparedStatement preparedStatement = connection.prepareStatement(query)) {
+
+            LocalDate currentDate = LocalDate.now();
+            String effectiveMonth = Optional.ofNullable(month).orElse(currentDate.format(DateTimeFormatter.ofPattern("yyyy-MM")));
+
+            preparedStatement.setString(1, effectiveMonth.split("-")[0]);
+            preparedStatement.setString(2, effectiveMonth);
+            preparedStatement.setString(3, effectiveMonth);
+
+            ResultSet resultSet = preparedStatement.executeQuery();
+
+            while (resultSet.next()) {
+                HistoryData historyData = new HistoryData();
+                historyData.setTargetYear(resultSet.getString("target_year"));
+                historyData.setLocation(resultSet.getString("location"));
+                historyData.setImportDate(resultSet.getString("import_date"));
+                historyData.setT1(resultSet.getDouble("t1"));
+                historyData.setT2(resultSet.getDouble("t2"));
+                historyDataList.add(historyData);
+            }
+        }
+        return historyDataList;
+    }
+
+    @Override
+    public UploadHistory getUploadHistory(int year) throws SQLException {
+        String query = "SELECT * FROM upload_history WHERE year = ? AND status = 2";
+
+        try (Connection connection = DBConnectionUtil.getConnection();
+             PreparedStatement preparedStatement = connection.prepareStatement(query)) {
+
+            preparedStatement.setInt(1, year);
+            ResultSet resultSet = preparedStatement.executeQuery();
+
+            if (resultSet.next()) {
+                UploadHistory uploadHistory = new UploadHistory();
+                uploadHistory.setId(resultSet.getInt("id"));
+                uploadHistory.setYear(resultSet.getInt("year"));
+                uploadHistory.setStatus(resultSet.getInt("status"));
+                return uploadHistory;
+            }
+        }
+        return null;
+    }
+}
+
+// 6. Service Interface
+interface HistoryDataService {
+    Map<String, Object> getHistoryData(String month) throws SQLException;
+}
+
+// 7. Service Implementation
+class HistoryDataServiceImpl implements HistoryDataService {
+    private final HistoryDataDAO historyDataDAO = new HistoryDataDAOImpl();
+
+    @Override
+    public Map<String, Object> getHistoryData(String month) throws SQLException {
+        LocalDate currentDate = LocalDate.now();
+        String effectiveMonth = Optional.ofNullable(month).orElse(currentDate.format(DateTimeFormatter.ofPattern("yyyy-MM")));
+        int year = Integer.parseInt(effectiveMonth.split("-")[0]);
+
+        UploadHistory uploadHistory = historyDataDAO.getUploadHistory(year);
+        List<HistoryDataDTO> historyDataDTOList = new ArrayList<>();
+
+        if (uploadHistory != null) {
+            List<HistoryData> historyDataList = historyDataDAO.getHistoryDataByMonth(effectiveMonth);
+            for (HistoryData historyData : historyDataList) {
+                historyDataDTOList.add(new HistoryDataDTO(historyData));
+            }
+        }
+
+        UploadHistoryDTO uploadHistoryDTO = uploadHistory != null ? new UploadHistoryDTO(uploadHistory) : null;
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("upload_history", uploadHistoryDTO);
+        response.put("items", historyDataDTOList);
+
+        return response;
+    }
+}
+
+// 8. REST Controller
+@Path("/api")
+public class HistoryDataController {
+    private final HistoryDataService historyDataService = new HistoryDataServiceImpl();
+
+    @GET
+    @Path("/history-data")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response getHistoryData(@QueryParam("month") String month) {
+        try {
+            Map<String, Object> response = historyDataService.getHistoryData(month);
+            return Response.ok(response).build();
+        } catch (SQLException e) {
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                           .entity("Error fetching data: " + e.getMessage())
+                           .build();
+        }
+    }
+}
